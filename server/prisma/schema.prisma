@@ -1,0 +1,319 @@
+// Waste Material Management System — Prisma schema (MongoDB)
+//
+// Accounting conventions
+// ----------------------
+// Party & Labour ledgers are "payable" accounts from the business' point of view:
+//   credit = amount we owe them (purchase value, wages earned)
+//   debit  = amount we paid them (payments, deductions)
+//   balance = opening (signed) + Σcredit − Σdebit   → positive = payable, negative = advance
+//
+// CashEntry is the cash/bank book. Every money movement (payment at purchase,
+// truck rent paid by us, wages paid on the spot, payments, expenses, receipts)
+// creates one CashEntry. The Daybook is built from it.
+//
+// Ledger and cash rows point to their source document (purchase / payment /
+// expense). Posting code deletes exactly those rows before re-posting or deleting
+// a document, inside a transaction (MongoDB must run as a replica set).
+//
+// Storage notes for MongoDB:
+//   - Money and weights are stored as Float and always rounded to 2 decimals in code.
+//   - Business dates are stored as DateTime at UTC midnight.
+//   - Slip / voucher numbers come from the Counter collection (atomic increment).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  STAFF
+}
+
+enum BalanceType {
+  DR
+  CR
+}
+
+enum PaymentMethod {
+  CASH
+  BANK
+}
+
+enum TruckRentPaidBy {
+  ME // we pay the driver, it is our cost
+  PARTY // the party pays the driver, not in our books
+  DEDUCT // we pay the driver and deduct it from the party's amount
+}
+
+enum AccountType {
+  PARTY
+  LABOUR
+}
+
+enum PayeeType {
+  PARTY
+  LABOUR
+  OTHER
+}
+
+enum Direction {
+  IN
+  OUT
+}
+
+enum CashCategory {
+  PURCHASE_PAYMENT // paid to party while recording a purchase
+  TRUCK_RENT
+  LABOUR_WAGE // wages paid on the spot while recording a purchase
+  PARTY_PAYMENT
+  LABOUR_PAYMENT
+  OTHER_PAYMENT
+  RECEIPT
+  EXPENSE
+}
+
+/// Named sequences for human-readable document numbers (PUR-00001, PV-00001).
+model Counter {
+  id    String @id @default(auto()) @map("_id") @db.ObjectId
+  name  String @unique
+  value Int    @default(0)
+}
+
+model User {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(STAFF)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  purchases Purchase[]
+  expenses  Expense[]
+  payments  Payment[]
+}
+
+/// Single settings document, addressed by key = "default".
+model Setting {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  key          String   @unique @default("default")
+  businessName String   @default("Waste Material Co.")
+  address      String?
+  phone        String?
+  currency     String   @default("PKR")
+  weightUnit   String   @default("KG")
+  openingCash  Float    @default(0)
+  openingBank  Float    @default(0)
+  updatedAt    DateTime @updatedAt
+}
+
+model Party {
+  id             String      @id @default(auto()) @map("_id") @db.ObjectId
+  name           String
+  phone          String?
+  address        String?
+  cnic           String?
+  openingBalance Float       @default(0)
+  openingType    BalanceType @default(CR)
+  notes          String?
+  isActive       Boolean     @default(true)
+  deletedAt      DateTime?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  purchases     Purchase[]
+  payments      Payment[]
+  ledgerEntries LedgerEntry[]
+
+  @@index([name])
+  @@index([deletedAt])
+}
+
+model Labour {
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  name        String
+  phone       String?
+  address     String?
+  defaultWage Float?
+  isActive    Boolean   @default(true)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  work          PurchaseLabour[]
+  payments      Payment[]
+  ledgerEntries LedgerEntry[]
+
+  @@index([name])
+  @@index([deletedAt])
+}
+
+model Purchase {
+  id              String          @id @default(auto()) @map("_id") @db.ObjectId
+  serialNo        Int             @unique
+  purchaseNo      String          @unique
+  date            DateTime
+  partyId         String          @db.ObjectId
+  vehicleNo       String
+  driverName      String?
+  driverPhone     String?
+  material        String?
+  grossWeight     Float
+  tareWeight      Float
+  netWeight       Float
+  rate            Float
+  amount          Float
+  truckRent       Float           @default(0)
+  truckRentPaidBy TruckRentPaidBy @default(ME)
+  truckRentMethod PaymentMethod   @default(CASH)
+  labourCost      Float           @default(0)
+  amountPaid      Float           @default(0)
+  paymentMethod   PaymentMethod   @default(CASH)
+  grandTotal      Float
+  partyPayable    Float // amount − deducted rent − paid now
+  notes           String?
+  createdById     String?         @db.ObjectId
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  party         Party            @relation(fields: [partyId], references: [id])
+  createdBy     User?            @relation(fields: [createdById], references: [id])
+  labours       PurchaseLabour[]
+  ledgerEntries LedgerEntry[]
+  cashEntries   CashEntry[]
+
+  @@index([date])
+  @@index([partyId])
+  @@index([vehicleNo])
+}
+
+model PurchaseLabour {
+  id         String         @id @default(auto()) @map("_id") @db.ObjectId
+  purchaseId String         @db.ObjectId
+  labourId   String         @db.ObjectId
+  wage       Float
+  paid       Boolean        @default(false) // paid on the spot
+  paidMethod PaymentMethod?
+  createdAt  DateTime       @default(now())
+
+  purchase Purchase @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  labour   Labour   @relation(fields: [labourId], references: [id])
+
+  @@index([purchaseId])
+  @@index([labourId])
+}
+
+model ExpenseCategory {
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  name        String    @unique
+  description String?
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  expenses    Expense[]
+}
+
+model Expense {
+  id            String        @id @default(auto()) @map("_id") @db.ObjectId
+  date          DateTime
+  categoryId    String        @db.ObjectId
+  amount        Float
+  paymentMethod PaymentMethod @default(CASH)
+  paidTo        String?
+  description   String?
+  createdById   String?       @db.ObjectId
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  category    ExpenseCategory @relation(fields: [categoryId], references: [id])
+  createdBy   User?           @relation(fields: [createdById], references: [id])
+  cashEntries CashEntry[]
+
+  @@index([date])
+  @@index([categoryId])
+}
+
+model Payment {
+  id          String        @id @default(auto()) @map("_id") @db.ObjectId
+  serialNo    Int           @unique
+  voucherNo   String        @unique
+  date        DateTime
+  payeeType   PayeeType
+  direction   Direction     @default(OUT) // OUT = we pay, IN = we receive (refund / other income)
+  partyId     String?       @db.ObjectId
+  labourId    String?       @db.ObjectId
+  payeeName   String? // for OTHER
+  amount      Float
+  method      PaymentMethod @default(CASH)
+  note        String?
+  createdById String?       @db.ObjectId
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  party         Party?        @relation(fields: [partyId], references: [id])
+  labour        Labour?       @relation(fields: [labourId], references: [id])
+  createdBy     User?         @relation(fields: [createdById], references: [id])
+  ledgerEntries LedgerEntry[]
+  cashEntries   CashEntry[]
+
+  @@index([date])
+  @@index([partyId])
+  @@index([labourId])
+}
+
+model LedgerEntry {
+  id          String      @id @default(auto()) @map("_id") @db.ObjectId
+  date        DateTime
+  accountType AccountType
+  partyId     String?     @db.ObjectId
+  labourId    String?     @db.ObjectId
+  reference   String
+  description String
+  debit       Float       @default(0)
+  credit      Float       @default(0)
+  purchaseId  String?     @db.ObjectId
+  paymentId   String?     @db.ObjectId
+  seq         Int         @default(0) // order of rows posted by the same document
+  createdAt   DateTime    @default(now())
+
+  party    Party?    @relation(fields: [partyId], references: [id])
+  labour   Labour?   @relation(fields: [labourId], references: [id])
+  purchase Purchase? @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  payment  Payment?  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@index([partyId, date])
+  @@index([labourId, date])
+  @@index([purchaseId])
+  @@index([paymentId])
+}
+
+model CashEntry {
+  id          String        @id @default(auto()) @map("_id") @db.ObjectId
+  date        DateTime
+  method      PaymentMethod
+  direction   Direction
+  category    CashCategory
+  amount      Float
+  reference   String
+  description String
+  purchaseId  String?       @db.ObjectId
+  paymentId   String?       @db.ObjectId
+  expenseId   String?       @db.ObjectId
+  seq         Int           @default(0) // order of rows posted by the same document
+  createdAt   DateTime      @default(now())
+
+  purchase Purchase? @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  payment  Payment?  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  expense  Expense?  @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+
+  @@index([date, method])
+  @@index([purchaseId])
+  @@index([paymentId])
+  @@index([expenseId])
+}
