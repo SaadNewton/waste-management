@@ -44,13 +44,7 @@ npm install
 npm run dev                   # http://localhost:3000
 ```
 
-### Logins (from the seed)
-| Role  | Email               | Password  |
-|-------|---------------------|-----------|
-| Admin | admin@example.com   | admin123  |
-| Staff | staff@example.com   | staff123  |
 
-**Admins** can delete records and manage settings and users. **Staff** can create and edit records.
 
 ### Scripts
 | server | |
