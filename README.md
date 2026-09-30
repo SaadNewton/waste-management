@@ -2,8 +2,8 @@
 
 Tracks truck purchases of waste material, offloading labour, truck rent, expenses, party and labour ledgers, payments, and daily cash flow.
 
-- **client/**: Next.js 15 (App Router), TypeScript, Tailwind CSS v4, shadcn/ui (Base UI), React Hook Form + Zod, TanStack Query, Recharts
-- **server/**: Node.js + Express 5 (TypeScript), Prisma 6, **MongoDB**, JWT auth, Zod validation
+- **frontend/**: Next.js 15 (App Router), TypeScript, Tailwind CSS v4, shadcn/ui (Base UI), React Hook Form + Zod, TanStack Query, Recharts
+- **backend/**: Node.js + Express 5 (TypeScript), Prisma 6, **MongoDB**, JWT auth, Zod validation
 
 Currency defaults to **PKR** and can be changed in Settings. Weights are in **KG**.
 
@@ -12,55 +12,44 @@ Currency defaults to **PKR** and can be changed in Settings. Weights are in **KG
 ## Setup
 
 ### Prerequisites
-- Node.js 20+ (tested on 22)
-- MongoDB 6+ running as a **replica set** (tested on 8.3). Every financial save runs in a
-  multi-document transaction, and MongoDB only supports transactions on a replica set.
-  - **Local:** `npm run mongo` (below) starts a single-node replica set on port 27018, with its
-    data in `server/.mongo-data`. It needs `mongod` and `mongosh` on your PATH (`brew install mongodb-community mongosh`).
-  - **MongoDB Atlas:** every Atlas cluster, including the free tier, is already a replica set.
-    Put its connection string in `DATABASE_URL` and skip `npm run mongo`.
+- Node.js 20.11+ (tested on 22)
+- MongoDB 6+ with `mongod` and `mongosh` on your PATH (`brew install mongodb-community mongosh`).
+  The app runs MongoDB as a single-node **replica set** on port 27018, because every financial
+  save runs in a multi-document transaction and MongoDB only supports those on a replica set.
 
-### 1. Database
+### Install and run
 ```bash
-cd server
-npm install
-npm run mongo                 # keep this running in its own terminal
+npm install      # installs root, backend and frontend deps; creates backend/.env and frontend/.env.local
+npm run dev      # starts MongoDB, the API and the web app together
 ```
 
-### 2. API server
-```bash
-cd server
-cp .env.example .env          # set DATABASE_URL and JWT_SECRET
-npm run db:push               # creates collections and indexes from the Prisma schema
-npm run db:seed               # sample data (wipes existing data!)
-npm run dev                   # http://localhost:4000/api
-```
+- Web app: http://localhost:3000
+- API: http://localhost:4000/api
 
-### 3. Web client
-```bash
-cd client
-cp .env.example .env.local    # NEXT_PUBLIC_API_URL=http://localhost:4000/api
-npm install
-npm run dev                   # http://localhost:3000
-```
+`npm run dev` starts MongoDB (data in `backend/.mongo-data`), syncs the Prisma schema, and runs the
+API and the web app with auto-reload, all in one terminal. Press Ctrl+C to stop everything.
 
+For sample data, run `npm run db:seed` while `npm run dev` is running. **This wipes existing data.**
 
+Set a real `JWT_SECRET` in `backend/.env` before deploying anywhere.
 
-### Scripts
-| server | |
+### Using MongoDB Atlas instead
+Every Atlas cluster, including the free tier, is already a replica set. Put its connection string in
+`DATABASE_URL` in `backend/.env`, run `npm run db:push` once, then use `npm run dev:atlas`. That
+skips starting a local MongoDB.
+
+### Scripts (run from the repo root)
+| Script | |
 |---|---|
-| `npm run mongo` | Start the local MongoDB replica set (port 27018) |
-| `npm run dev` | API with auto-reload |
-| `npm run build` / `npm start` | Compile to `dist/` and run it |
-| `npm run db:push` | Sync collections and indexes with `prisma/schema.prisma` |
+| `npm run dev` | MongoDB + API + web app |
+| `npm run dev:atlas` | API + web app, using the database in `DATABASE_URL` |
+| `npm run build` / `npm start` | Production build of both, then serve both |
+| `npm run db:push` | Sync collections and indexes with `backend/prisma/schema.prisma` |
 | `npm run db:seed` | Reset all data and load sample data |
-| `npm run db:reset` | Drop the database, push the schema and re-seed |
+| `npm run lint` | ESLint on the frontend |
 
-| client | |
-|---|---|
-| `npm run dev` | Dev server |
-| `npm run build` / `npm start` | Production build and serve |
-| `npm run lint` | ESLint |
+Each app still has its own scripts. For example, `npm run db:reset --prefix backend` drops the
+database, pushes the schema, and re-seeds.
 
 ---
 
@@ -139,7 +128,7 @@ Errors always look like `{ "error": { "code": "VALIDATION_ERROR", "message": "â€
 ## Folder structure
 
 ```
-server/
+backend/
   prisma/
     schema.prisma          all models, enums and relations (MongoDB)
     seed.ts                sample data, posted through the real services
@@ -159,7 +148,7 @@ server/
       purchases/           schema, service (create/update/delete in a transaction), routes
       expenses/  payments/  ledger/  daybook/  dashboard/
 
-client/src/
+frontend/src/
   app/
     login/
     (app)/                 authenticated area with the sidebar layout
